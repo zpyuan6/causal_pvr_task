@@ -8,9 +8,9 @@ import torch.optim as optim
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-def load_dataset(dataset_path, dataset_name, batch_size, is_return_dataset=False):
-    train_dataset = CausalPVRDataset(dataset_path, dataset_name, "train")
-    val_dataset = CausalPVRDataset(dataset_path, dataset_name, "val")
+def load_dataset(dataset_path, dataset_name, batch_size, is_return_dataset=False, return_pure_img=False):
+    train_dataset = CausalPVRDataset(dataset_path, dataset_name, "train", return_pure_img)
+    val_dataset = CausalPVRDataset(dataset_path, dataset_name, "val", return_pure_img)
     print(f"train dataset {len(train_dataset)}, val dataset {len(val_dataset)}")
 
     train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=batch_size, num_workers=6, pin_memory = True, prefetch_factor=batch_size*2)

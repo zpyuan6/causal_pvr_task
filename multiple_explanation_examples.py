@@ -6,6 +6,8 @@ import torch
 import os
 from explanation.heatmapes.grad_cam import generate_grad_cam_from_img
 from explanation.concept_based.cav import train_cav_for_pvr_task, show_concept_dataset, calculate_local_cav_sensitivity, calculate_global_tcav, identify_samples_based_on_cav
+from explanation.concept_based.crp_relmax import conditional_attributions, feature_visualization
+from explanation.causal.cexCNN import filter_importance, cexCNN_heatmap
 from model_training_for_causal_pvr_task import load_dataset
 import numpy as np
 from utils.present_explanation import present_heatmap
@@ -103,9 +105,87 @@ def generate_cav():
     #     num_samples = 5
     # )
 
+def generate_crp_relmax():
+    dataset_path = "F:\pvr_dataset\causal_validation_pvr\chain"
+    dataset_name = "mnist"
+    model_parameter_path = os.path.join(dataset_path, "resnet_best.pt")
+    num_class = 10
+    model_name = "resnet"
+    layer_name = "layer4.1.conv1"
+    target_channel = [50]
+    target_output = [1]
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = load_model(model_name, model_parameter_path, num_class=num_class).to(device)
+    model.eval()
+
+    _, _, train_dataset, val_dataset = load_dataset(
+        dataset_path,
+        dataset_name,
+        batch_size=8, 
+        is_return_dataset=True,
+        return_pure_img=True)
+
+    input_sample, y, variables  = load_data_sample(dataset_path)
+
+    input_sample = input_sample.unsqueeze(0).to(device)
+    input_sample.requires_grad = True
+
+    concept_ids = conditional_attributions(
+        model, 
+        input_sample, 
+        layer_name, 
+        target_channel, 
+        target_output
+        )
+
+    feature_visualization(
+        model, 
+        val_dataset, 
+        concept_ids,
+        layer_name)
+
+def generate_cexCNN():
+    dataset_path = "F:\pvr_dataset\causal_validation_pvr\chain"
+    dataset_name = "mnist"
+    model_parameter_path = os.path.join(dataset_path, "resnet_best.pt")
+    num_class = 10
+    model_name = "resnet"
+    layer_name = "layer4.1.conv1"
+    target_channel = [50]
+    target_output = [1]
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = load_model(model_name, model_parameter_path, num_class=num_class).to(device)
+    model.eval()
+
+    # _, _, train_dataset, val_dataset = load_dataset(
+    #     dataset_path,
+    #     dataset_name,
+    #     batch_size=8, 
+    #     is_return_dataset=True,
+    #     return_pure_img=True)
+
+    input_sample, y, variables  = load_data_sample(dataset_path)
+    input_sample = input_sample.to(device)
+
+    # filter_importance(model, input_sample, layer_name)
+
+    weighted_map, important_map, importance = cexCNN_heatmap(model, input_sample, layer_name)
+
+    present_heatmap(input_sample.cpu().numpy(), np.asarray(weighted_map))
+    present_heatmap(input_sample.cpu().numpy(), np.asarray(important_map))
+
+    print(importance)
 
 
 if __name__ == "__main__":
     # generate_heatmap()
     
-    generate_cav()
+    # generate_cav()
+
+    # generate_crp_relmax()
+
+    generate_cexCNN()

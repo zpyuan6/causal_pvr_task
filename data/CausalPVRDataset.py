@@ -8,7 +8,7 @@ import matplotlib.pylab as plt
 class CausalPVRDataset(Dataset):
     """Face Landmarks dataset."""
 
-    def __init__(self, dataset_path:str, dataset_name:str, train_or_val:str):
+    def __init__(self, dataset_path:str, dataset_name:str, train_or_val:str, return_pure_img:bool=False):
         """
         Args:
             csv_file (string): Path to the csv file with annotations.
@@ -16,6 +16,7 @@ class CausalPVRDataset(Dataset):
             transform (callable, optional): Optional transform to be applied
                 on a sample.
         """
+        self.return_pure_img = return_pure_img
         if dataset_name not in ["mnist", "cifar"]:
             raise Exception(f"Can not find dataset {dataset_name}.")
 
