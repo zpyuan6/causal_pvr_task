@@ -8,9 +8,12 @@ from explanation.heatmapes.grad_cam import generate_grad_cam_from_img
 from explanation.concept_based.cav import train_cav_for_pvr_task, show_concept_dataset, calculate_local_cav_sensitivity, calculate_global_tcav, identify_samples_based_on_cav
 from explanation.concept_based.crp_relmax import conditional_attributions, feature_visualization
 from explanation.causal.cexCNN import filter_importance, cexCNN_heatmap
+from explanation.causal.concept_causal_map import train_cp_for_pvr_task, show_concept_dataset_for_cp, calculate_local_concept_sensitivity, concept_detection
+# calculate_global_concept_sensitivity, identify_samples_based_on_cq
 from model_training_for_causal_pvr_task import load_dataset
 import numpy as np
 from utils.present_explanation import present_heatmap
+import matplotlib.pylab as plt
 
 
 def load_data_sample(dataset_path, dataset_name="mnist"):
@@ -180,6 +183,85 @@ def generate_cexCNN():
 
     print(importance)
 
+def generate_concept_causal_map():
+    dataset_path = "F:\pvr_dataset\causal_validation_pvr\chain"
+    dataset_name = "mnist"
+    model_parameter_path = os.path.join(dataset_path, "resnet_best.pt")
+    num_class = 10
+    model_name = "resnet"
+    layer_name = "layer4.1.conv1"
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    train_dataloader, val_dataloader, train_dataset, val_dataset = load_dataset(
+        dataset_path,
+        dataset_name,
+        batch_size=1, 
+        is_return_dataset=True)
+
+    model = load_model(model_name, model_parameter_path, num_class=num_class).to(device)
+    model.eval()
+
+    input_sample, y, variables  = load_data_sample(dataset_path)
+
+    # Training concept representation
+    # train_cp_for_pvr_task(
+    #     explained_model=model,
+    #     pvr_training_dataloader = train_dataloader,
+    #     cp_save_path=os.path.join(dataset_path,"cp"),
+    #     target_layer_type = [torch.nn.Conv2d],
+    #     sample_num=200,
+    #     pooling_type='mean'
+    # )
+
+    # train_cp_for_pvr_task(
+    #     explained_model=model,
+    #     pvr_training_dataloader = train_dataloader,
+    #     cp_save_path=os.path.join(dataset_path,"cp_max"),
+    #     target_layer_type = [torch.nn.Conv2d],
+    #     sample_num=200,
+    #     pooling_type='max'
+    # )
+
+    # show_concept_dataset_for_cp(
+    #     os.path.join(dataset_path,"cp"),
+    # )
+
+    concept_detection(
+        explained_model = model,
+        explained_sample = input_sample,
+        cp_save_path = os.path.join(dataset_path,"cp_max"),
+        pooling_type = 'max'
+    )
+
+    # conceptual_sensitivity_dict, predict_index = calculate_local_concept_sensitivity(
+    #     explained_model = model,
+    #     explained_sample = input_sample,
+    #     cp_save_path = os.path.join(dataset_path,"cp_max"),
+    # )
+
+    plt.imshow(input_sample.permute(1,2,0))
+    plt.show()
+
+    # print(conceptual_sensitivity_dict, predict_index, variables)
+
+    # calculate_global_concept_sensitivity(
+    #     explained_model=model,
+    #     evaluate_dataset = val_dataset,
+    #     cav_save_path=os.path.join(dataset_path,"cavs"),
+    #     layer_name = layer_name
+    # )
+
+    # identify_samples_based_on_cq(
+    #     explained_model=model,
+    #     evaluate_dataset = val_dataset,
+    #     cav_save_path=os.path.join(dataset_path,"cavs"),
+    #     layer_name = layer_name,
+    #     num_samples = 5
+    # )
+
+
+
 
 if __name__ == "__main__":
     # generate_heatmap()
@@ -188,4 +270,6 @@ if __name__ == "__main__":
 
     # generate_crp_relmax()
 
-    generate_cexCNN()
+    # generate_cexCNN()
+
+    generate_concept_causal_map()
