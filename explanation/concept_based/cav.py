@@ -235,8 +235,6 @@ def construct_pvr_concept_dataset(
                 break 
 
         training_samples = positive_training_samples + negative_training_samples
-
-        cav_register_hook(model, layer_name)
         
         values = []
         input_samples = []
@@ -426,13 +424,32 @@ def identify_samples_based_on_cav(
     cav_save_path: str,
     layer_name: str,
     num_samples: int,
+    explained_sample: torch.Tensor = None,
     ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     explained_model = explained_model.to(device)
 
-    cav_register_hook(explained_model, layer_name)
+    target_concept_list = []
+
+    if explained_sample != None:
+        conceptual_sensitivity_dict, predict_index = calculate_local_cav_sensitivity(
+            explained_model=explained_model,
+            explained_sample = explained_sample,
+            cav_save_path=cav_save_path,
+            layer_name = layer_name
+        )
+
+        sorted_conceptual_sensitivity_dict = sorted(conceptual_sensitivity_dict.items(), key=lambda kv:kv[1], reverse=True)[:4]
+
+        print(f"conceptual_sensitivity_dict: \n{sorted_conceptual_sensitivity_dict},\n predict_index: {predict_index}")
+
+        for item in sorted_conceptual_sensitivity_dict:
+            target_concept_list.append(item[0])
+
+
+    hooks = cav_register_hook(explained_model, layer_name)
 
     with tqdm(total=evaluate_dataset.__len__()) as tbar:
         tbar.set_description_str("Calculating local local cav")
@@ -455,32 +472,51 @@ def identify_samples_based_on_cav(
                 cav = CAV()
                 cav.load_from_txt(os.path.join(root,file))
 
-                if layer_name != cav.bottleneck:
-                    raise Exception(f"You input a different layer name {layer_name} for target cav layer name {cav.bottleneck}")
+                if len(target_concept_list)==0 or (cav.concept_name in target_concept_list):
 
-                cosine_similarity_list = []
+                    if layer_name != cav.bottleneck:
+                        raise Exception(f"You input a different layer name {layer_name} for target cav layer name {cav.bottleneck}")
 
-                for feature in features:
-                    cosine_similarity = - np.dot(feature.squeeze(), cav.get_direction()) / (np.linalg.norm(feature.squeeze())*np.linalg.norm(cav.get_direction()))
-                    cosine_similarity_list.append(cosine_similarity)
+                    cosine_similarity_list = []
 
-                cosine_similarity_list = np.array(cosine_similarity_list)
-                top_index = cosine_similarity_list.argsort()[::-1]
+                    for feature in features:
+                        cosine_similarity = - np.dot(feature.squeeze(), cav.get_direction()) / (np.linalg.norm(feature.squeeze())*np.linalg.norm(cav.get_direction()))
+                        cosine_similarity_list.append(cosine_similarity)
 
-                similar_sample_dict[cav.concept_name] = top_index
+                    cosine_similarity_list = np.array(cosine_similarity_list)
+                    top_index = cosine_similarity_list.argsort()[::-1]
 
-                for i in range(num_samples):
-                    plt.subplot(1, num_samples, i+1)
-                    show_sample,_,_ = evaluate_dataset.__getitem__(top_index[i])
-                    show_sample = show_sample.numpy().transpose(1,2,0)
-                    plt.imshow(show_sample)
-                    plt.title(f"Sim:{round(cosine_similarity_list[top_index[i]],3)}")
+                    similar_sample_dict[cav.concept_name] = top_index
 
-                    print(cav.accuracies)
+    fig, axes = plt.subplots(nrows = len(list(similar_sample_dict.keys())), ncols = num_samples, figsize=(len(list(similar_sample_dict.keys()))*3,num_samples*3))
 
-                plt.suptitle(f"{cav.concept_name}\nAcc:{cav.accuracies['overall']}")
+    for concept in similar_sample_dict.keys():
+        concept_index = list(similar_sample_dict.keys()).index(concept)
+        
+        for i in range(num_samples):
+            # axes[concept_index,i].imshow()
+            # plt.subplot(concept_index+1, num_samples, i+1)
+            show_sample,_,_ = evaluate_dataset.__getitem__(top_index[i])
+            show_sample = show_sample.numpy().transpose(1,2,0)
+            axes[concept_index,i].imshow(show_sample)
+            axes[concept_index,i].axis('off')
+            axes[concept_index,i].set_title(f"Sim:{round(cosine_similarity_list[top_index[i]].item(),4)}")
 
-                plt.show()
+        print(concept, cav.accuracies)
+        
+        axes[concept_index,0].axis('on')
+        axes[concept_index,0].set_yticks([])
+        axes[concept_index,0].set_xticks([])
+        axes[concept_index,0].set_ylabel(concept, rotation=0, size='large',
+                   ha='right', va='center')
+        # plt.suptitle(f"{cav.concept_name}\nAcc:{cav.accuracies['overall']}")
+
+    plt.show()
+
+    for h in hooks:
+        h.remove()
+
+    features_out.clear()
 
 
 

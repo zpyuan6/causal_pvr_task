@@ -158,4 +158,4 @@ def generate_grad_cam_from_img(last_layer_name:str, model:nn.Module, img:torch.T
     grad_in_hook.clear()
     grad_out_hook.clear()
 
-    return img.cpu().numpy(), cam
+    return img.cpu().numpy(), cam, predict.cpu(), class_idx.cpu()

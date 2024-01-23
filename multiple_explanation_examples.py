@@ -6,9 +6,9 @@ import torch
 import os
 from explanation.heatmapes.grad_cam import generate_grad_cam_from_img
 from explanation.concept_based.cav import train_cav_for_pvr_task, show_concept_dataset, calculate_local_cav_sensitivity, calculate_global_tcav, identify_samples_based_on_cav
-from explanation.concept_based.crp_relmax import conditional_attributions, feature_visualization
+from explanation.concept_based.crp_relmax import conditional_attributions, feature_visualization, identify_graph
 from explanation.causal.cexCNN import filter_importance, cexCNN_heatmap
-from explanation.causal.concept_causal_map import train_cp_for_pvr_task, show_concept_dataset_for_cp, calculate_local_concept_sensitivity, concept_detection
+from explanation.causal.concept_causal_map import train_cp_for_pvr_task, show_concept_dataset_for_cp, calculate_local_concept_sensitivity, concept_detection, calculate_local_concept_sensitivity_based_on_gradient, identify_global_concept_causality_graph
 # calculate_global_concept_sensitivity, identify_samples_based_on_cq
 from model_training_for_causal_pvr_task import load_dataset
 import numpy as np
@@ -28,9 +28,9 @@ def show_input_sample(input_sample: torch.Tensor):
 
 def generate_explanation(model:torch.nn.Module,input_img:torch.Tensor):
     last_layer_name = "layer4.1.bn2"
-    input_numpy,cam = generate_grad_cam_from_img(last_layer_name, model, input_img)
+    input_numpy,cam, predict, class_idx = generate_grad_cam_from_img(last_layer_name, model, input_img)
 
-    present_heatmap(input_numpy, np.asarray(cam))
+    present_heatmap(input_numpy, np.asarray(cam), predict, class_idx)
 
 def generate_heatmap():
     dataset_path = "F:\pvr_dataset\causal_validation_pvr\chain"
@@ -84,14 +84,23 @@ def generate_cav():
     #     layer_name = "layer4.1.bn2"
     # )
 
-    conceptual_sensitivity_dict, predict_index = calculate_local_cav_sensitivity(
-        explained_model=model,
-        explained_sample = input_sample,
-        cav_save_path=os.path.join(dataset_path,"cavs"),
-        layer_name = layer_name
-    )
+    # conceptual_sensitivity_dict, predict_index = calculate_local_cav_sensitivity(
+    #     explained_model=model,
+    #     explained_sample = input_sample,
+    #     cav_save_path=os.path.join(dataset_path,"cavs"),
+    #     layer_name = layer_name
+    # )
 
-    print(conceptual_sensitivity_dict, predict_index, variables)
+    # sorted_conceptual_sensitivity_dict = sorted(conceptual_sensitivity_dict.items(), key=lambda kv:kv[1], reverse=True)
+
+    # print(f"conceptual_sensitivity_dict: \n{sorted_conceptual_sensitivity_dict},\n predict_index: {predict_index},\n variables: {variables},\n")
+
+    # identify_global_concept_causality_graph(
+    #     explained_model=model, 
+    #     pvr_training_dataset=train_dataset,
+    #     cav_save_path=os.path.join(dataset_path,"cavs"),
+    #     layer_name = layer_name
+    # )
 
     # calculate_global_tcav(
     #     explained_model=model,
@@ -100,13 +109,14 @@ def generate_cav():
     #     layer_name = layer_name
     # )
 
-    # identify_samples_based_on_cav(
-    #     explained_model=model,
-    #     evaluate_dataset = val_dataset,
-    #     cav_save_path=os.path.join(dataset_path,"cavs"),
-    #     layer_name = layer_name,
-    #     num_samples = 5
-    # )
+    identify_samples_based_on_cav(
+        explained_model=model,
+        evaluate_dataset = val_dataset,
+        cav_save_path=os.path.join(dataset_path,"cavs"),
+        layer_name = layer_name,
+        num_samples = 3,
+        explained_sample = input_sample,
+    )
 
 def generate_crp_relmax():
     dataset_path = "F:\pvr_dataset\causal_validation_pvr\chain"
@@ -116,7 +126,6 @@ def generate_crp_relmax():
     model_name = "resnet"
     layer_name = "layer4.1.conv1"
     target_channel = [50]
-    target_output = [1]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -130,24 +139,29 @@ def generate_crp_relmax():
         is_return_dataset=True,
         return_pure_img=True)
 
-    input_sample, y, variables  = load_data_sample(dataset_path)
+    # input_sample, y, variables  = load_data_sample(dataset_path)
+    input_sample = val_dataset.__getitem__(0)[0]
 
-    input_sample = input_sample.unsqueeze(0).to(device)
-    input_sample.requires_grad = True
+    input_sample = input_sample.to(device)
 
-    concept_ids = conditional_attributions(
+    # conditional_attributions(
+    #     model, 
+    #     input_sample, 
+    #     layer_name
+    #     )
+
+    # feature_visualization(
+    #     model, 
+    #     val_dataset, 
+    #     input_sample,
+    #     layer_name)
+
+    identify_graph(
         model, 
-        input_sample, 
-        layer_name, 
-        target_channel, 
-        target_output
-        )
-
-    feature_visualization(
-        model, 
-        val_dataset, 
-        concept_ids,
-        layer_name)
+        input_sample,
+        val_dataset,
+        layer_name
+    )
 
 def generate_cexCNN():
     dataset_path = "F:\pvr_dataset\causal_validation_pvr\chain"
@@ -208,7 +222,7 @@ def generate_concept_causal_map():
     # train_cp_for_pvr_task(
     #     explained_model=model,
     #     pvr_training_dataloader = train_dataloader,
-    #     cp_save_path=os.path.join(dataset_path,"cp"),
+    #     cp_save_path=os.path.join(dataset_path,"cp_position"),
     #     target_layer_type = [torch.nn.Conv2d],
     #     sample_num=200,
     #     pooling_type='mean'
@@ -217,33 +231,42 @@ def generate_concept_causal_map():
     # train_cp_for_pvr_task(
     #     explained_model=model,
     #     pvr_training_dataloader = train_dataloader,
-    #     cp_save_path=os.path.join(dataset_path,"cp_max"),
+    #     cp_save_path=os.path.join(dataset_path,"cp_position"),
     #     target_layer_type = [torch.nn.Conv2d],
     #     sample_num=200,
-    #     pooling_type='max'
+    #     pooling_type='mean'
     # )
 
     # show_concept_dataset_for_cp(
     #     os.path.join(dataset_path,"cp"),
     # )
 
-    concept_detection(
-        explained_model = model,
-        explained_sample = input_sample,
-        cp_save_path = os.path.join(dataset_path,"cp_max"),
-        pooling_type = 'max'
-    )
+    # contained_concept = concept_detection(
+    #     explained_model = model,
+    #     explained_sample = input_sample,
+    #     cp_save_path = os.path.join(dataset_path,"cp_position"),
+    #     pooling_type = 'mean'
+    # )
 
     # conceptual_sensitivity_dict, predict_index = calculate_local_concept_sensitivity(
     #     explained_model = model,
     #     explained_sample = input_sample,
-    #     cp_save_path = os.path.join(dataset_path,"cp_max"),
+    #     cp_save_path = os.path.join(dataset_path,"cp_position"),
+    #     pooling_type = 'mean', 
+    #     contained_concept = contained_concept
     # )
 
-    plt.imshow(input_sample.permute(1,2,0))
-    plt.show()
+    # plt.imshow(input_sample.permute(1,2,0))
+    # plt.show()
 
     # print(conceptual_sensitivity_dict, predict_index, variables)
+
+
+    identify_global_concept_causality_graph(
+        explained_model=model,
+        cp_save_path=os.path.join(dataset_path,"cp_position"),
+        num_samples = 200
+    )
 
     # calculate_global_concept_sensitivity(
     #     explained_model=model,
@@ -260,11 +283,66 @@ def generate_concept_causal_map():
     #     num_samples = 5
     # )
 
+def draw_figure_for_three_methods(sample_index:int=None):
+    # This function is used to draw a figure containing three types of explanations (attribution methods, sample based methods, visualization methods) based on one input sample.
 
+    # set up for model, dataset, input sample
+    dataset_path = "F:\pvr_dataset\causal_validation_pvr\chain"
+    dataset_name = "mnist"
+    model_parameter_path = os.path.join(dataset_path, "resnet_best.pt")
+    num_class = 10
+    model_name = "resnet"
+    layer_name = "layer4.1.bn2"
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    _, _, train_dataset, val_dataset = load_dataset(
+        dataset_path,
+        dataset_name,
+        batch_size=8, 
+        is_return_dataset=True)
+
+    model = load_model(model_name, model_parameter_path, num_class=num_class).to(device)
+    model.eval()
+
+    if sample_index == None:
+        input_sample, y, variables = load_data_sample(dataset_path)
+    else:
+        input_sample, y, variables = val_dataset.__getitem__(sample_index)
+
+    input_sample = input_sample.to(device)
+
+    attribution methos
+    print("---attribution methos--------------------------------")
+    print(sample_index)
+    generate_explanation(model, input_sample)
+
+    # sample-based methos
+    print("---sample-based methos-------------------------------")
+    identify_samples_based_on_cav(
+        explained_model=model,
+        evaluate_dataset = val_dataset,
+        cav_save_path=os.path.join(dataset_path,"cavs"),
+        layer_name = layer_name,
+        num_samples = 3,
+        explained_sample = input_sample,
+    )
+
+    # visualization methos
+    print("---visualization methos------------------------------")
+    layer_name = "layer4.1.conv1"
+    identify_graph(
+        model, 
+        input_sample,
+        val_dataset,
+        layer_name
+    )
 
 
 if __name__ == "__main__":
-    # generate_heatmap()
+
+    # for i in range(100):
+    #     generate_heatmap()
     
     # generate_cav()
 
@@ -272,4 +350,11 @@ if __name__ == "__main__":
 
     # generate_cexCNN()
 
-    generate_concept_causal_map()
+    # generate_concept_causal_map()
+
+
+
+    sample_indexs = [2,6,16,18,21,14,17,20,25,27,28,34,36,40,51,71,72]
+
+    for i in sample_indexs:
+        draw_figure_for_three_methods(i)
