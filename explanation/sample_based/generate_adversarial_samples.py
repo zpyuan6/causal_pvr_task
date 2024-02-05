@@ -67,8 +67,3 @@ def gen_adversarial_sample(num_step:int,model:nn.Module,img_data,device,target_l
             mask = optimizer_SGD(mask, delta_mask)
 
     return best_mask, merge_mask(img_data,best_mask)
-
-
-
-
-        

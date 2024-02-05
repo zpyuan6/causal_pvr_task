@@ -17,6 +17,7 @@ from scipy import stats
 from scipy.stats import chi2_contingency
 import pandas as pd
 from pyvis.network import Network
+from torchvision import transforms
 
 class ConceptRepresentation(object):
     """CAV class contains methods for concept activation vector (CAV).
@@ -167,8 +168,24 @@ class ConceptRepresentation(object):
         return self
 
 
-features_out = []
 
+feature_maps = []
+def register_hook_for_feature_maps(model:Module, layer_names:list):
+    def forward_hook(module, input, output):
+        features = output.cpu().detach().numpy()
+        feature_maps.append(features)
+        return None
+
+    hooks = []
+    for name, module in model.named_modules():
+            # print(name)
+        if name in layer_names:
+            # print("find layer ", name)
+            hooks.append(module.register_forward_hook(forward_hook))
+
+    return hooks
+
+features_out = []
 def cp_register_hook(model:Module, layer_names:list, pooling_type:str):
     if not pooling_type in ['mean','max']:
         raise Exception(f"Can not support pooling type {pooling_type}")
@@ -319,6 +336,130 @@ def construct_pvr_concept_dataset_for_cp(
 
     return concept_dataset_dict
 
+def construct_causality_dataset(
+    pvr_datasetloader:DataLoader, 
+    sample_num:int, 
+    model:Module, 
+    target_layer_names:list,
+    pooling_type:str,
+    causal_type:str
+):
+    causality_types = ["chain", "fork", "collider"]
+
+    if causal_type == causality_types[0]:
+        concept_list = ['ca','cb']
+    elif causal_type == causality_types[1]:
+        concept_list = ['ca','cb','cc']
+    elif causal_type == causality_types[2]:
+        concept_list = ['ca','cb','cc']
+    else:
+        raise Exception(f"Can not find causality type {causal_type}")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    concept_dataset_dict = {}
+
+    model.to(device)
+
+    with tqdm(total= len(concept_list), desc="Sperate dataset to concept dataset") as tbar:
+        for concept in concept_list:
+            tbar.update(1)
+            concept_index = concept_list.index(concept)
+
+            data = {}
+            for epoch in pvr_datasetloader:
+                input_x, output_y, all_value = epoch
+                input_x, output_y, all_value = input_x[0], output_y[0], all_value[0].numpy()
+
+                if concept_index == 0:
+                    # ca sample
+                    if all_value[0] in data:
+                        if len(data[all_value[0]]) < sample_num:
+                            data[all_value[0]].append(input_x)
+                    else:
+                        data[all_value[0]] = [input_x]
+                elif concept_index == 1:
+                    # cb sample
+                    if all_value[0] < 4:
+                        cb_value = 0 
+                    elif all_value[0] < 7:
+                        cb_value = 1
+                    else:
+                        cb_value = 2
+
+                    if cb_value in data:
+                        if len(data[cb_value]) < sample_num:
+                            data[cb_value].append(input_x)
+                    else:
+                        data[cb_value] = [input_x]
+                elif concept_index == 2:
+                    # cc sample
+                    if causal_type == causality_types[1]:
+                        if all_value[0] < 4:
+                            cc_value = all_value[2]
+                        elif all_value[0] < 7:
+                            cc_value = all_value[3]
+                        else:
+                            cc_value = all_value[1]
+                        if cc_value in data:
+                            if len(data[cc_value]) < sample_num:
+                                data[cc_value].append(input_x)
+                        else:
+                            data[cc_value] = [input_x]
+                    elif causal_type == causality_types[2]:
+                        if all_value[0] < 4:
+                            cc_value = 1
+                        elif all_value[0] < 7:
+                            cc_value = 2
+                        else:
+                            cc_value = 0
+                        if cc_value in data:
+                            if len(data[cc_value]) < sample_num:
+                                data[cc_value].append(input_x)
+                        else:
+                            data[cc_value] = [input_x]
+                    else:
+                        raise Exception(f"Can not find causality type {causal_type}")
+                else:
+                    raise Exception(f"Concept_index out off range")
+
+            hooks = cp_register_hook(model, target_layer_names, pooling_type)
+
+            values = []
+            input_samples = []
+            for key, input_sample in data.items():
+                values.extend([key for i in range(len(input_sample))])
+                input_samples.extend(input_sample)
+            
+            print(len(values), len(input_samples))
+            input_tensor = torch.stack(input_samples)
+            model_input = input_tensor.to(device)
+            model(model_input)
+
+            if concept == 'ca':
+                concept_list_name = [f"{concept}_{i}" for i in range(10)]
+            elif concept == 'cb':
+                concept_list_name = [f"{concept}_{i}" for i in ["ITR", "IBL", "IBR"]]
+            elif concept == 'cc':
+                if causal_type == causality_types[1]:
+                    concept_list_name = [f"{concept}_{i}" for i in range(10)]
+                elif causal_type == causality_types[2]:
+                    concept_list_name = [f"{concept}_{i}" for i in ["ITR", "IBL", "IBR"]]
+                else:
+                    raise Exception(f"Can not find causality type {causal_type}")
+
+            concept_dataset_dict[concept] = {"input_sample_img":input_tensor.numpy(), "concept_label":np.array(values).astype(np.float32), "concept_list": concept_list_name, "concept_input_features": {}}
+
+            for i, layer_name in enumerate(target_layer_names):
+                concept_dataset_dict[concept]["concept_input_features"][layer_name] = features_out[i]
+
+            for h in hooks:
+                h.remove()
+
+            features_out.clear()
+
+    return concept_dataset_dict
+
 
 def construct_pvr_position_dataset(
     pvr_datasetloader:DataLoader, 
@@ -389,6 +530,75 @@ def construct_pvr_position_dataset(
 
     return concept_dataset_dict
 
+def train_cp_for_pvr_task_for_causality(
+    explained_model:torch.nn.Module, 
+    pvr_training_dataloader:DataLoader,
+    cp_save_path:str,
+    target_layer_type:list,
+    sample_num:int=200,
+    pooling_type:str='mean',
+    causal_type:str='chain'):
+
+    if not os.path.exists(cp_save_path):
+        os.makedirs(cp_save_path)
+
+    target_layer_names = []
+
+    for name, layer in explained_model.named_modules():
+        for layer_definition in target_layer_type:
+            if isinstance(layer, layer_definition) or issubclass(layer.__class__, layer_definition):
+                if name not in target_layer_names:
+                    target_layer_names.append(name)
+
+
+    concept_datasets = construct_causality_dataset(
+        pvr_training_dataloader, 
+        sample_num,
+        explained_model, 
+        target_layer_names,
+        pooling_type,
+        causal_type
+        )
+
+    pickle.dump(concept_datasets, open(os.path.join(cp_save_path, f"concept_causality_dataset.txt"), 'wb'))
+
+    best_cps_accuracy = {}
+
+    for concept_name in concept_datasets.keys():
+        concept_label = concept_datasets[concept_name]["concept_label"]
+        concept_input_features = concept_datasets[concept_name]["concept_input_features"]
+        concept_list = concept_datasets[concept_name]["concept_list"]
+
+        cps_for_one_concept = []
+
+        for layer_name, concept_input_feature in concept_input_features.items():
+            cp = ConceptRepresentation(
+                concept_name, 
+                concept_list,
+                layer_name, 
+                {
+                    "model_type":'linear',
+                    "alpha":0.01
+                    }, 
+                save_path=os.path.join(cp_save_path, f"cp_for_{concept_name}_{layer_name}.txt")
+            )
+
+            cp.train(concept_input_feature,concept_label)
+
+            cps_for_one_concept.append((cp,cp.accuracies['overall']))
+
+        sorted_cps = sorted(cps_for_one_concept, key = lambda kv:kv[1], reverse=True)
+
+        best_cps_accuracy[concept_name] = (sorted_cps[0][0].accuracies['overall'], sorted_cps[0][0].bottleneck)
+
+        sorted_cps[0][0].save_path = os.path.join(cp_save_path, f"best_cp_for_{concept_name}.txt")
+
+        sorted_cps[0][0].save_cp()
+
+    print("Best CPs Accuracy: ", best_cps_accuracy)
+
+
+
 def train_cp_for_pvr_task(
     explained_model:torch.nn.Module, 
     pvr_training_dataloader:DataLoader,
@@ -400,12 +610,12 @@ def train_cp_for_pvr_task(
     if not os.path.exists(cp_save_path):
         os.makedirs(cp_save_path)
 
-    concept_cav_list = []
+    # concept_cav_list = []
     position_list = ['a','b','c','d']
 
-    for position in position_list:
-        for i in range(10):
-            concept_cav_list.append(f"{position}_{i}")
+    # for position in position_list:
+    #     for i in range(10):
+    #         concept_cav_list.append(f"{position}_{i}")
 
     target_layer_names = []
 
@@ -908,7 +1118,7 @@ def identify_global_concept_causality_graph(
     # init_graph.show_graph()
     # Finish adding skeletons
     # Start validating causality
-    init_graph.set_direct(True)
+    # init_graph.set_direct(True)
 
     init_graph.save(os.path.join(cp_save_path, f"global_graph.txt"))
 
@@ -917,6 +1127,36 @@ def identify_global_concept_causality_graph(
     init_graph.show_graph()
 
 
+
+def identify_local_concept_causality_graph(
+    explained_model: torch.nn.Module,
+    explained_sample: torch.Tensor,
+    cp_save_path: str,
+    pooling_type: str = 'mean'
+):
+
+    contained_concept = concept_detection(
+        explained_model = explained_model,
+        explained_sample = explained_sample,
+        cp_save_path = cp_save_path,
+        pooling_type = pooling_type
+    )
+
+    concept_sensitivity, original_output_index = calculate_local_concept_sensitivity(
+        explained_model = explained_model,
+        explained_sample = explained_sample,
+        cp_save_path = cp_save_path,
+        pooling_type = pooling_type, 
+        contained_concept = contained_concept
+    ) 
+
+    global_causal_graph = CausalGraph()
+
+    global_causal_graph.load(os.path.join(cp_save_path, f"global_graph.txt"))
+
+    output_neighbors = global_causal_graph.get_neighbors('Model Input')
+
+    global_causal_graph.show_graph()
 
 def calculate_local_concept_sensitivity_based_on_gradient(
         explained_model: torch.nn.Module,
@@ -1103,6 +1343,78 @@ def identify_samples_based_on_cav(
                 plt.show()
 
 
+def concept_maps(
+    explained_model: torch.nn.Module,
+    explained_sample: torch.Tensor,
+    cp_save_path: str,
+    pooling_type: str='mean'):
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    explained_sample = explained_sample.to(device).unsqueeze(0)
+
+    concept_detection_results = []
+    concept_maps = []
+
+    for root, folder, files in os.walk(cp_save_path):
+        for file in files:
+            if file.split("_")[0] == "best":
+                cp = ConceptRepresentation()
+                cp.load_from_txt(os.path.join(root,file))
+
+                print(cp.concept_list)
+
+                layer_name = cp.bottleneck
+
+                forward_hook = cp_register_hook(explained_model, [layer_name], pooling_type)
+
+                feature_map_hook = register_hook_for_feature_maps(explained_model, [layer_name])
+                
+                output = torch.softmax(explained_model(explained_sample), dim=1)
+
+                # prediction_index = torch.argmax(output,dim=1)
+            
+                cp_input_feature = features_out[0]
+
+                pred = int(cp.predict(cp_input_feature)[0])
+
+                feature_map = np.squeeze(feature_maps[0])
+
+                # weights = np.expand_dims(np.expand_dims(cp.cps[pred], axis=-1),axis=-1)
+
+                # weights =  F.relu(torch.from_numpy(-cp.cps[pred]), inplace=True)
+                weights = torch.from_numpy(-cp.cps[pred])
+                target_chanel = torch.argmax(weights)
+                weights = F.one_hot(target_chanel, num_classes=weights.shape[0]).unsqueeze(-1).unsqueeze(-1) 
+
+                print(target_chanel)
+
+                cam = (weights*feature_map).sum(axis=0)
+                cam = F.relu(cam, inplace=True)
+                cam -= torch.min(cam)
+                batch_cams = cam/torch.max(cam)
+                print(weights.shape, feature_map.shape, batch_cams.shape)
+                # batch_cams = F.normalize(cam)
+                pil_image = transforms.ToPILImage()(batch_cams)
+                cam = pil_image.resize((explained_sample.shape[-1],explained_sample.shape[-2]))
+
+                concept_maps.append(cam)
+
+                # if pred>0:
+                concept_detection_results.append(f"{cp.concept_name}_{pred}")
+
+                features_out.clear()
+                
+                [h.remove() for h in forward_hook]
+
+                feature_maps.clear()
+                
+                [h.remove() for h in feature_map_hook]
+
+
+    print(f"Sample contain concept {concept_detection_results}")
+
+    return concept_maps, concept_detection_results
 
 
 

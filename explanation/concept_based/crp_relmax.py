@@ -79,10 +79,10 @@ def identify_graph(
 
     print(channel_dict)
 
-    node_list = [f"Model Output: {target_y}"]
+    node_list = [f"Output: {target_y}"]
     node_list.extend([node[0] for node in nodes])
-    node_labels = [f"Model Output: {target_y}"]
-    node_labels.extend([f"{node[0]} Channel {node[1]}" for node in nodes])
+    node_labels = [f"Output: {target_y}"]
+    node_labels.extend([f"{node[0]} Channel {node[1]}".replace("layer", "") for node in nodes])
 
     # color = ['rgba(255,0,255, 0.8)' for i in len(node_labels)]
     # line_color = [item.replace("0.8", "0.2")  for item in color]
@@ -113,6 +113,10 @@ def identify_graph(
                         source = source_list,
                         target = target_list,
                         value = value_list,
+                    ),
+                    textfont=dict(
+                        size=14,
+                        color='black'
                     )
                 )
             ]

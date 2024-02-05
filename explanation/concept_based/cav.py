@@ -182,11 +182,136 @@ def register_gradient_hook(model:Module, layer_name:str):
 
     return hooks
 
+def construct_pvr_concept_dataset_for_causality(
+    pvr_dataset:Dataset, 
+    sample_num:int, 
+    model:Module, 
+    layer_name:str,
+    causal_type:str
+    ):
+
+    """ 
+    
+    Return:
+        concept_dataset_dict: is a dict in format 
+            {
+                'concept name 1': 
+                (
+                    original model input numpy,
+                    features numpy for target layer,
+                    concept annotation value
+                ),
+                'concept name 1': (...),
+                ...
+            }
+    """
+
+    causality_types = ["chain", "fork", "collider"]
+
+    if causal_type == causality_types[0]:
+        concept_list = ['ca','cb']
+    elif causal_type == causality_types[1]:
+        concept_list = ['ca','cb','cc']
+    elif causal_type == causality_types[2]:
+        concept_list = ['ca','cb','cc']
+    else:
+        raise Exception(f"Can not find causality type {causal_type}")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    concept_dataset_dict = {}
+
+    model.to(device)
+
+    with tqdm(total= len(concept_list), desc="Sperate dataset to concept dataset") as tbar:
+        for concept in concept_list:
+            tbar.update(1)
+            concept_index = concept_list.index(concept)
+
+            data = {}
+            for i in range(pvr_dataset.__len__()):
+                input_x, output_y, all_value = pvr_dataset.__getitem__(i)
+                all_value =  all_value.numpy()
+                if concept_index == 0:
+                    # ca sample
+                    if all_value[0] in data:
+                        if len(data[all_value[0]]) < sample_num:
+                            data[all_value[0]].append(input_x)
+                    else:
+                        data[all_value[0]] = [input_x]
+                elif concept_index == 1:
+                    # cb sample
+                    if all_value[0] < 4:
+                        cb_value = 0 
+                    elif all_value[0] < 7:
+                        cb_value = 1
+                    else:
+                        cb_value = 2
+
+                    if cb_value in data:
+                        if len(data[cb_value]) < sample_num:
+                            data[cb_value].append(input_x)
+                    else:
+                        data[cb_value] = [input_x]
+                elif concept_index == 2:
+                    # cc sample
+                    if causal_type == causality_types[1]:
+                        if all_value[0] < 4:
+                            cc_value = all_value[2]
+                        elif all_value[0] < 7:
+                            cc_value = all_value[3]
+                        else:
+                            cc_value = all_value[1]
+                        if cc_value in data:
+                            if len(data[cc_value]) < sample_num:
+                                data[cc_value].append(input_x)
+                        else:
+                            data[cc_value] = [input_x]
+                    elif causal_type == causality_types[2]:
+                        if all_value[0] < 4:
+                            cc_value = 1
+                        elif all_value[0] < 7:
+                            cc_value = 2
+                        else:
+                            cc_value = 0
+                        if cc_value in data:
+                            if len(data[cc_value]) < sample_num:
+                                data[cc_value].append(input_x)
+                        else:
+                            data[cc_value] = [input_x]
+                    else:
+                        raise Exception(f"Can not find causality type {causal_type}")
+                else:
+                    raise Exception(f"Concept_index out off range")
+
+            hooks = cav_register_hook(model, layer_name)
+            
+            values = []
+            input_samples = []
+
+            for key, input_sample in data.items():
+                values.extend([key for i in range(len(input_sample))])
+                input_samples.extend(input_sample)
+            
+            input_tensor = torch.stack(input_samples)
+            print(input_tensor.shape, layer_name)
+            model_input = input_tensor.to(device)
+
+            model(model_input)
+
+            concept_dataset_dict[concept] = (input_tensor.numpy(), features_out[0], np.array(values).astype(np.float32))
+
+            for h in hooks:
+                h.remove()
+
+            features_out.clear()
+
+    return concept_dataset_dict
+
 
 def construct_pvr_concept_dataset(
     pvr_dataset:Dataset, 
     concept_list:list, 
-    position_list:list, 
     sample_num:int, 
     model:Module, 
     layer_name:str
@@ -214,80 +339,107 @@ def construct_pvr_concept_dataset(
 
     model.to(device)
 
-    for concept in concept_list:
-        position, value = concept.split("_")
-        value = int(value)
-        position_index = position_list.index(position)
+    with tqdm(total= len(concept_list), desc="Sperate dataset to concept dataset") as tbar:
+        for concept in concept_list:
+            tbar.update(1)
+            # position, value = concept.split("_")
+            # value = int(value)
+            position_index = concept_list.index(concept)
 
-        positive_training_samples = []
-        negative_training_samples = []
+            # positive_training_samples = []
+            # negative_training_samples = []
 
-        for i in range(pvr_dataset.__len__()):
-            input_x, output_y, all_value = pvr_dataset.__getitem__(i)
-            if all_value[position_index] == value:
-                if len(positive_training_samples) < sample_num:
-                    positive_training_samples.append((input_x,1))
-            else:
-                if len(negative_training_samples) < sample_num:
-                    negative_training_samples.append((input_x,0))
+            data = {}
+            for i in range(pvr_dataset.__len__()):
+                input_x, output_y, all_value = pvr_dataset.__getitem__(i)
+                all_value =  all_value.numpy()
+                if all_value[position_index] in data:
+                    if len(data[all_value[position_index]]) < sample_num:
+                        data[all_value[position_index]].append(input_x)
+                else:
+                    data[all_value[position_index]] = [input_x]
 
-            if len(positive_training_samples) == sample_num and len(negative_training_samples) == sample_num:
-                break 
+            hooks = cav_register_hook(model, layer_name)
+            
+            values = []
+            input_samples = []
+            
+            for key, input_sample in data.items():
+                values.extend([key for i in range(len(input_sample))])
+                input_samples.extend(input_sample)
+            
+            input_tensor = torch.stack(input_samples)
+            print(input_tensor.shape, layer_name)
+            model_input = input_tensor.to(device)
 
-        training_samples = positive_training_samples + negative_training_samples
-        
-        values = []
-        input_samples = []
-        for item in training_samples:
-            input_sample, concept_value = item
-            values.append(concept_value)
-            input_samples.append(input_sample)
-        
-        input_tensor = torch.stack(input_samples)
+            model(model_input)
 
-        model_input = input_tensor.to(device)
+            concept_dataset_dict[concept] = (input_tensor.numpy(), features_out[0], np.array(values).astype(np.float32))
 
-        hooks = cav_register_hook(model, layer_name)
+            for h in hooks:
+                h.remove()
 
-        model(model_input)
-
-        concept_dataset_dict[concept] = (input_tensor.numpy(), features_out[0], np.array(values).astype(np.float32))
-
-        for h in hooks:
-            h.remove()
-
-        features_out.clear()
+            features_out.clear()
 
     return concept_dataset_dict
 
+
+def train_cav_for_pvr_task_based_type(
+    explained_model:torch.nn.Module, 
+    pvr_training_dataset:Dataset,
+    cav_save_path:str,
+    target_layer_type:list,
+    causal_type:str = None):
+
+    target_layer_names = []
+
+    for name, layer in explained_model.named_modules():
+        for layer_definition in target_layer_type:
+            if isinstance(layer, layer_definition) or issubclass(layer.__class__, layer_definition):
+                if name not in target_layer_names:
+                    target_layer_names.append(name)
+                    train_cav_for_pvr_task(
+                                explained_model, 
+                                pvr_training_dataset,
+                                cav_save_path,
+                                name,
+                                causal_type)
 
 def train_cav_for_pvr_task(
     explained_model:torch.nn.Module, 
     pvr_training_dataset:Dataset,
     cav_save_path:str,
-    layer_name:str):
+    layer_name:str,
+    causal_type:str = None):
 
     if not os.path.exists(cav_save_path):
         os.makedirs(cav_save_path)
 
-    concept_cav_list = []
+    # concept_cav_list = []
     position_list = ['a','b','c','d']
-    sample_num = 200
+    sample_num = 20
 
-    for position in position_list:
-        for i in range(10):
-            concept_cav_list.append(f"{position}_{i}")
+    # for position in position_list:
+    #     for i in range(10):
+    #         concept_cav_list.append(f"{position}_{i}")
 
     concept_datasets = construct_pvr_concept_dataset(
         pvr_training_dataset, 
-        concept_cav_list, 
         position_list, 
         sample_num,
         explained_model, 
         layer_name
         )
 
-    pickle.dump(concept_datasets, open(os.path.join(cav_save_path,f"concept_dataset_{layer_name}.txt"), 'wb'))
+    # concept_datasets = construct_pvr_concept_dataset_for_causality(
+    #     pvr_training_dataset, 
+    #     sample_num,
+    #     explained_model, 
+    #     layer_name,
+    #     causal_type
+    #     )
+
+    pickle.dump(concept_datasets, open(os.path.join(cav_save_path,f"concept_dataset_causality_{layer_name}.txt"), 'wb'))
 
     for concept_name in concept_datasets.keys():
         print(concept_name)
@@ -472,6 +624,8 @@ def identify_samples_based_on_cav(
                 cav = CAV()
                 cav.load_from_txt(os.path.join(root,file))
 
+                target_concept_list = ["a_9","b_6"]
+
                 if len(target_concept_list)==0 or (cav.concept_name in target_concept_list):
 
                     if layer_name != cav.bottleneck:
@@ -488,7 +642,7 @@ def identify_samples_based_on_cav(
 
                     similar_sample_dict[cav.concept_name] = top_index
 
-    fig, axes = plt.subplots(nrows = len(list(similar_sample_dict.keys())), ncols = num_samples, figsize=(len(list(similar_sample_dict.keys()))*3,num_samples*3))
+    fig, axes = plt.subplots(nrows = len(list(similar_sample_dict.keys())), ncols = num_samples, figsize=(num_samples*2,len(list(similar_sample_dict.keys()))*2))
 
     for concept in similar_sample_dict.keys():
         concept_index = list(similar_sample_dict.keys()).index(concept)
@@ -507,7 +661,7 @@ def identify_samples_based_on_cav(
         axes[concept_index,0].axis('on')
         axes[concept_index,0].set_yticks([])
         axes[concept_index,0].set_xticks([])
-        axes[concept_index,0].set_ylabel(concept, rotation=0, size='large',
+        axes[concept_index,0].set_ylabel(f"Concept: {concept}", rotation=0, size='large',
                    ha='right', va='center')
         # plt.suptitle(f"{cav.concept_name}\nAcc:{cav.accuracies['overall']}")
 
@@ -517,6 +671,8 @@ def identify_samples_based_on_cav(
         h.remove()
 
     features_out.clear()
+
+    return fig
 
 
 

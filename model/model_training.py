@@ -171,7 +171,7 @@ def load_dataset(data_folder, input_size, batch_size):
     return train_dataloader, val_dataloader
 
 
-def load_model(model_name, model_parameter_path=None, num_class=None):
+def load_model(model_name, model_parameter_path=None, num_class=None, is_print=False):
     num_class = 7 if num_class==None else num_class
     if model_name=='vgg':
         model = torchvision.models.vgg16_bn(pretrained=True) 
@@ -191,7 +191,9 @@ def load_model(model_name, model_parameter_path=None, num_class=None):
     if model_parameter_path is not None:
         model.load_state_dict(torch.load(model_parameter_path))
 
-    print("Model Structure", model)
+    if is_print:
+        print("Model Structure", model)
+
     return model
 
 

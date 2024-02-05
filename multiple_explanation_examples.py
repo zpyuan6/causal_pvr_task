@@ -30,10 +30,10 @@ def generate_explanation(model:torch.nn.Module,input_img:torch.Tensor):
     last_layer_name = "layer4.1.bn2"
     input_numpy,cam, predict, class_idx = generate_grad_cam_from_img(last_layer_name, model, input_img)
 
-    present_heatmap(input_numpy, np.asarray(cam), predict, class_idx)
+    return present_heatmap(input_numpy, np.asarray(cam), predict, class_idx)
 
 def generate_heatmap():
-    dataset_path = "F:\pvr_dataset\causal_validation_pvr\chain"
+    dataset_path = "F:\pvr_dataset\causal_validation_pvr\\fork"
     model_parameter_path = os.path.join(dataset_path, "resnet_best.pt")
     num_class = 10
     model_name = "resnet"
@@ -72,12 +72,12 @@ def generate_cav():
     input_sample, y, variables  = load_data_sample(dataset_path)
 
     # Training CAV model
-    # train_cav_for_pvr_task(
-    #     explained_model=model, 
-    #     pvr_training_dataset=train_dataset,
-    #     cav_save_path=os.path.join(dataset_path,"cavs"),
-    #     layer_name = layer_name
-    # )
+    train_cav_for_pvr_task(
+        explained_model=model, 
+        pvr_training_dataset=train_dataset,
+        cav_save_path=os.path.join(dataset_path,"cavs"),
+        layer_name = layer_name
+    )
 
     # show_concept_dataset(
     #     os.path.join(dataset_path,"cavs"),
@@ -115,7 +115,7 @@ def generate_cav():
         cav_save_path=os.path.join(dataset_path,"cavs"),
         layer_name = layer_name,
         num_samples = 3,
-        explained_sample = input_sample,
+        # explained_sample = input_sample,
     )
 
 def generate_crp_relmax():
@@ -218,15 +218,44 @@ def generate_concept_causal_map():
 
     input_sample, y, variables  = load_data_sample(dataset_path)
 
+    i = 1
+    while (i<4):
+        input_sample, y, variables  = load_data_sample(dataset_path)
+        if variables[0] == 0:
+            plt.subplot(1,3,i)
+            plt.imshow(input_sample.permute(1,2,0))
+            plt.axis("off")
+
+            i+=1
+        
+    plt.show()
+
+    # plt.subplot(1,5,1)
+    # plt.imshow(input_sample.permute(1,2,0))
+    # plt.axis("off")
+    # plt.subplot(1,5,2)
+    # plt.imshow(input_sample.permute(1,2,0)[:28,:28,:])
+    # plt.axis("off")
+    # plt.subplot(1,5,3)
+    # plt.imshow(input_sample.permute(1,2,0)[:28,28:,:])
+    # plt.axis("off")
+    # plt.subplot(1,5,4)
+    # plt.imshow(input_sample.permute(1,2,0)[28:,:28,:])
+    # plt.axis("off")
+    # plt.subplot(1,5,5)
+    # plt.imshow(input_sample.permute(1,2,0)[28:,28:,:])
+    # plt.axis("off")
+    # plt.show()
+
     # Training concept representation
-    # train_cp_for_pvr_task(
-    #     explained_model=model,
-    #     pvr_training_dataloader = train_dataloader,
-    #     cp_save_path=os.path.join(dataset_path,"cp_position"),
-    #     target_layer_type = [torch.nn.Conv2d],
-    #     sample_num=200,
-    #     pooling_type='mean'
-    # )
+    train_cp_for_pvr_task(
+        explained_model=model,
+        pvr_training_dataloader = train_dataloader,
+        cp_save_path=os.path.join(dataset_path,"cp_position"),
+        target_layer_type = [torch.nn.Conv2d],
+        sample_num=200,
+        pooling_type='mean'
+    )
 
     # train_cp_for_pvr_task(
     #     explained_model=model,
@@ -256,17 +285,14 @@ def generate_concept_causal_map():
     #     contained_concept = contained_concept
     # )
 
-    # plt.imshow(input_sample.permute(1,2,0))
-    # plt.show()
-
     # print(conceptual_sensitivity_dict, predict_index, variables)
 
 
-    identify_global_concept_causality_graph(
-        explained_model=model,
-        cp_save_path=os.path.join(dataset_path,"cp_position"),
-        num_samples = 200
-    )
+    # identify_global_concept_causality_graph(
+    #     explained_model=model,
+    #     cp_save_path=os.path.join(dataset_path,"cp_position"),
+    #     num_samples = 200
+    # )
 
     # calculate_global_concept_sensitivity(
     #     explained_model=model,
@@ -312,37 +338,78 @@ def draw_figure_for_three_methods(sample_index:int=None):
 
     input_sample = input_sample.to(device)
 
-    attribution methos
-    print("---attribution methos--------------------------------")
-    print(sample_index)
-    generate_explanation(model, input_sample)
+    # # attribution methos
+    # print("---attribution methos--------------------------------")
+    # print(sample_index)
+    # generate_explanation(model, input_sample)
 
-    # sample-based methos
-    print("---sample-based methos-------------------------------")
-    identify_samples_based_on_cav(
+    # # sample-based methos
+    # print("---sample-based methos-------------------------------")
+    # fig = identify_samples_based_on_cav(
+    #     explained_model=model,
+    #     evaluate_dataset = val_dataset,
+    #     cav_save_path=os.path.join(dataset_path,"cavs"),
+    #     layer_name = layer_name,
+    #     num_samples = 8,
+    #     explained_sample = input_sample,
+    # )
+
+    # fig.savefig(f"E:\\我的云端硬盘\\Phd_work\\conference_paper\\KDD2024\\Sample_{sample_index}.png")
+
+    # visualization methos
+    # print("---visualization methos------------------------------")
+    # layer_name = "layer4.1.conv1"
+    # identify_graph(
+    #     model, 
+    #     input_sample,
+    #     val_dataset,
+    #     layer_name
+    # )
+
+    # CoCa methods
+    print("---CoCa methos------------------------------")
+    contained_concept = concept_detection(
+        explained_model = model,
+        explained_sample = input_sample,
+        cp_save_path = os.path.join(dataset_path,"cp_position"),
+        pooling_type = 'mean'
+    )
+
+    conceptual_sensitivity_dict, predict_index = calculate_local_concept_sensitivity(
+        explained_model = model,
+        explained_sample = input_sample,
+        cp_save_path = os.path.join(dataset_path,"cp_position"),
+        pooling_type = 'mean', 
+        contained_concept = contained_concept
+    )
+
+    print(conceptual_sensitivity_dict, predict_index, variables)
+
+
+
+def sample_selection_methods():
+    # CAV-based Methods
+    fig = identify_samples_based_on_cav(
         explained_model=model,
         evaluate_dataset = val_dataset,
         cav_save_path=os.path.join(dataset_path,"cavs"),
         layer_name = layer_name,
-        num_samples = 3,
+        num_samples = 8,
         explained_sample = input_sample,
     )
 
-    # visualization methos
-    print("---visualization methos------------------------------")
-    layer_name = "layer4.1.conv1"
-    identify_graph(
-        model, 
-        input_sample,
-        val_dataset,
-        layer_name
-    )
+    # Feature Similarity
+
+
+    # 
 
 
 if __name__ == "__main__":
 
-    # for i in range(100):
-    #     generate_heatmap()
+
+
+    for i in range(100):
+        generate_heatmap()
     
     # generate_cav()
 
@@ -354,7 +421,7 @@ if __name__ == "__main__":
 
 
 
-    sample_indexs = [2,6,16,18,21,14,17,20,25,27,28,34,36,40,51,71,72]
+    # sample_indexs = [2,18,40,71]
 
-    for i in sample_indexs:
-        draw_figure_for_three_methods(i)
+    # for i in sample_indexs:
+    #     draw_figure_for_three_methods(i)

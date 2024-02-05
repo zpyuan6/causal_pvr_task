@@ -4,6 +4,10 @@ import numpy as np
 def present_heatmap(input_img:np.ndarray, heatmap:np.ndarray, predict=None, class_idx=None):
     if input_img.shape[-1]!=3:
         input_img = input_img.transpose(1,2,0)
+    
+    fig = plt.figure()
+
+    # fig.add_subplot
 
     plt.subplot(1,2,1)
     if predict!=None:
@@ -22,7 +26,7 @@ def present_heatmap(input_img:np.ndarray, heatmap:np.ndarray, predict=None, clas
     plt.imshow(input_img)
     plt.imshow(heatmap, alpha=0.5)
     plt.axis('off')
-    plt.show()
 
+    plt.show()
 
 
