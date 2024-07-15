@@ -16,8 +16,12 @@ def load_data_sample(dataset_path, dataset_name="mnist"):
     return val_dataset.__getitem__(random.randint(0,val_dataset.__len__()))
 
 def generate_concept_causal_map(
-    dataset_path="F:\pvr_dataset\causal_validation_pvr\chain"
+    dataset_path:str,
+    model_name:str="mnist"
     ):
+
+    causal_type = dataset_path.split('\\')[-1].split("_")[-1]
+
     dataset_name = "mnist"
     model_parameter_path = os.path.join(dataset_path, "resnet_best.pt")
     num_class = 10
@@ -102,16 +106,24 @@ def generate_concept_causal_map(
 
     # identify_global_concept_causality_graph(
     #     explained_model=model,
-    #     cp_save_path=os.path.join(dataset_path,"cp_position"),
-    #     num_samples = 200
+    #     cp_save_path=os.path.join(dataset_path,model_name,"cp"),
+    #     num_samples = 10,
+    #     causal_type =causal_type
     # )
 
-    identify_local_concept_causality_graph(
+    identify_global_concept_causality_graph(
         explained_model=model,
-        explained_sample = input_sample,
         cp_save_path=os.path.join(dataset_path,"cp_position"),
-        pooling_type = 'mean', 
+        num_samples = 200,
+        causal_type =causal_type
     )
+
+    # identify_local_concept_causality_graph(
+    #     explained_model=model,
+    #     explained_sample = input_sample,
+    #     cp_save_path=os.path.join(dataset_path,"cp_position"),
+    #     pooling_type = 'mean', 
+    # )
 
     # calculate_global_concept_sensitivity(
     #     explained_model=model,
@@ -131,11 +143,13 @@ def generate_concept_causal_map(
 
 if __name__ == "__main__":
 
+    generate_concept_causal_map(dataset_path="F:\pvr_dataset\causal_validation_pvr_200sample\chain")
+
     # generate_concept_causal_map(dataset_path="F:\pvr_dataset\causal_validation_pvr\chain")
 
     # generate_concept_causal_map(dataset_path="F:\pvr_dataset\causal_validation_pvr\limited_chain")
 
-    generate_concept_causal_map(dataset_path="F:\\pvr_dataset\\causal_validation_pvr\\fork")
+    # generate_concept_causal_map(dataset_path="F:\\pvr_dataset\\causal_validation_pvr\\fork")
 
     # generate_concept_causal_map(dataset_path="F:\\pvr_dataset\\causal_validation_pvr\\limited_fork")
 

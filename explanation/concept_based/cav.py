@@ -68,8 +68,8 @@ class CAV(object):
             self.cavs = [c for c in lm.coef_]
         self._save_cavs()
 
-    def get_direction(self):
-        return self.cavs[0]
+    def get_direction(self, index):
+        return self.cavs[index]
 
 
     def _train_lm(self, lm, x:torch.tensor, y:torch.tensor):
@@ -363,7 +363,7 @@ def construct_pvr_concept_dataset(
             
             values = []
             input_samples = []
-            
+
             for key, input_sample in data.items():
                 values.extend([key for i in range(len(input_sample))])
                 input_samples.extend(input_sample)
@@ -417,27 +417,28 @@ def train_cav_for_pvr_task(
 
     # concept_cav_list = []
     position_list = ['a','b','c','d']
-    sample_num = 20
+    sample_num = 10
 
     # for position in position_list:
     #     for i in range(10):
     #         concept_cav_list.append(f"{position}_{i}")
 
-    concept_datasets = construct_pvr_concept_dataset(
-        pvr_training_dataset, 
-        position_list, 
-        sample_num,
-        explained_model, 
-        layer_name
-        )
-
-    # concept_datasets = construct_pvr_concept_dataset_for_causality(
-    #     pvr_training_dataset, 
-    #     sample_num,
-    #     explained_model, 
-    #     layer_name,
-    #     causal_type
-    #     )
+    if causal_type== None:
+        concept_datasets = construct_pvr_concept_dataset(
+            pvr_training_dataset, 
+            position_list, 
+            sample_num,
+            explained_model, 
+            layer_name
+            )
+    else:
+        concept_datasets = construct_pvr_concept_dataset_for_causality(
+            pvr_training_dataset, 
+            sample_num,
+            explained_model, 
+            layer_name,
+            causal_type
+            )
 
     pickle.dump(concept_datasets, open(os.path.join(cav_save_path,f"concept_dataset_causality_{layer_name}.txt"), 'wb'))
 
@@ -576,6 +577,8 @@ def identify_samples_based_on_cav(
     cav_save_path: str,
     layer_name: str,
     num_samples: int,
+    concept_name: str = None,
+    concept_target_value: int  = None,
     explained_sample: torch.Tensor = None,
     ):
 
@@ -584,6 +587,9 @@ def identify_samples_based_on_cav(
     explained_model = explained_model.to(device)
 
     target_concept_list = []
+
+    if concept_name!= None:
+        target_concept_list.append(concept_name)
 
     if explained_sample != None:
         conceptual_sensitivity_dict, predict_index = calculate_local_cav_sensitivity(
@@ -603,38 +609,39 @@ def identify_samples_based_on_cav(
 
     hooks = cav_register_hook(explained_model, layer_name)
 
-    with tqdm(total=evaluate_dataset.__len__()) as tbar:
-        tbar.set_description_str("Calculating local local cav")
-        for i in range(evaluate_dataset.__len__()):
-            tbar.update(1)
+    if len(features_out) == 0:
+        with tqdm(total=evaluate_dataset.__len__()) as tbar:
+            tbar.set_description_str("Calculating local local cav")
+            for i in range(evaluate_dataset.__len__()):
+                tbar.update(1)
 
-            explained_sample, classification, record = evaluate_dataset.__getitem__(i)
-            model_input = explained_sample.unsqueeze(0).to(device)
-            explained_model = explained_model.to(device)
-            output = explained_model(model_input)
+                explained_sample, classification, record = evaluate_dataset.__getitem__(i)
+                model_input = explained_sample.unsqueeze(0).to(device)
+                explained_model = explained_model.to(device)
+                output = explained_model(model_input)
 
 
     features = features_out
 
     similar_sample_dict={}
-
+    
     for root, folder, files in os.walk(cav_save_path):
         for file in files:
             if file.split("_")[0] == "cav":
                 cav = CAV()
                 cav.load_from_txt(os.path.join(root,file))
 
-                target_concept_list = ["a_9","b_6"]
-
                 if len(target_concept_list)==0 or (cav.concept_name in target_concept_list):
 
                     if layer_name != cav.bottleneck:
-                        raise Exception(f"You input a different layer name {layer_name} for target cav layer name {cav.bottleneck}")
+                        continue
+
+                    target_cav = cav
 
                     cosine_similarity_list = []
 
                     for feature in features:
-                        cosine_similarity = - np.dot(feature.squeeze(), cav.get_direction()) / (np.linalg.norm(feature.squeeze())*np.linalg.norm(cav.get_direction()))
+                        cosine_similarity = np.dot(feature.squeeze(), cav.get_direction(concept_target_value)) / (np.linalg.norm(feature.squeeze())*np.linalg.norm(cav.get_direction(concept_target_value)))
                         cosine_similarity_list.append(cosine_similarity)
 
                     cosine_similarity_list = np.array(cosine_similarity_list)
@@ -642,37 +649,60 @@ def identify_samples_based_on_cav(
 
                     similar_sample_dict[cav.concept_name] = top_index
 
-    fig, axes = plt.subplots(nrows = len(list(similar_sample_dict.keys())), ncols = num_samples, figsize=(num_samples*2,len(list(similar_sample_dict.keys()))*2))
+    for i in range(num_samples):
+        plt.subplot(1, num_samples*2, i+1)
+        show_sample,_,_ = evaluate_dataset.__getitem__(top_index[i])
+        show_sample = show_sample.numpy().transpose(1,2,0)
+        plt.imshow(show_sample)
+        plt.axis('off')
+        # plt.title(f"Sim:{round(cosine_similarity_list[top_index[i]],2)}")
 
-    for concept in similar_sample_dict.keys():
-        concept_index = list(similar_sample_dict.keys()).index(concept)
-        
-        for i in range(num_samples):
-            # axes[concept_index,i].imshow()
-            # plt.subplot(concept_index+1, num_samples, i+1)
-            show_sample,_,_ = evaluate_dataset.__getitem__(top_index[i])
-            show_sample = show_sample.numpy().transpose(1,2,0)
-            axes[concept_index,i].imshow(show_sample)
-            axes[concept_index,i].axis('off')
-            axes[concept_index,i].set_title(f"Sim:{round(cosine_similarity_list[top_index[i]].item(),4)}")
+    for i in range(num_samples):
+        plt.subplot(1, num_samples*2, i+1+num_samples)
+        show_sample,_,_ = evaluate_dataset.__getitem__(top_index[-i-1])
+        show_sample = show_sample.numpy().transpose(1,2,0)
+        plt.imshow(show_sample)
+        plt.axis('off')
 
-        print(concept, cav.accuracies)
-        
-        axes[concept_index,0].axis('on')
-        axes[concept_index,0].set_yticks([])
-        axes[concept_index,0].set_xticks([])
-        axes[concept_index,0].set_ylabel(f"Concept: {concept}", rotation=0, size='large',
-                   ha='right', va='center')
-        # plt.suptitle(f"{cav.concept_name}\nAcc:{cav.accuracies['overall']}")
+
+    plt.suptitle(f"CAV: {target_cav.concept_name} {concept_target_value}\nAcc:{target_cav.accuracies['overall']}")
 
     plt.show()
 
-    for h in hooks:
-        h.remove()
+    [h.remove() for h in hooks]
+    # features_out.clear()
 
-    features_out.clear()
+    # fig, axes = plt.subplots(nrows = len(list(similar_sample_dict.keys())), ncols = num_samples, figsize=(num_samples*2,len(list(similar_sample_dict.keys()))*2))
 
-    return fig
+    # for concept in similar_sample_dict.keys():
+    #     concept_index = list(similar_sample_dict.keys()).index(concept)
+        
+    #     for i in range(num_samples):
+    #         # axes[concept_index,i].imshow()
+    #         # plt.subplot(concept_index+1, num_samples, i+1)
+    #         show_sample,_,_ = evaluate_dataset.__getitem__(top_index[i])
+    #         show_sample = show_sample.numpy().transpose(1,2,0)
+    #         axes[concept_index,i].imshow(show_sample)
+    #         axes[concept_index,i].axis('off')
+    #         axes[concept_index,i].set_title(f"Sim:{round(cosine_similarity_list[top_index[i]].item(),4)}")
+
+    #     print(concept, cav.accuracies)
+        
+    #     axes[concept_index,0].axis('on')
+    #     axes[concept_index,0].set_yticks([])
+    #     axes[concept_index,0].set_xticks([])
+    #     axes[concept_index,0].set_ylabel(f"Concept: {concept}", rotation=0, size='large',
+    #                ha='right', va='center')
+    #     # plt.suptitle(f"{cav.concept_name}\nAcc:{cav.accuracies['overall']}")
+
+    # plt.show()
+
+    # for h in hooks:
+    #     h.remove()
+
+    # features_out.clear()
+
+    # return fig
 
 
 

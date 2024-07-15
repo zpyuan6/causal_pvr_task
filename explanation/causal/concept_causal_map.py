@@ -598,6 +598,76 @@ def train_cp_for_pvr_task_for_causality(
     print("Best CPs Accuracy: ", best_cps_accuracy)
 
 
+def identify_concept_representation_with_causal_structure(
+    explained_model:torch.nn.Module, 
+    pvr_training_dataloader:DataLoader,
+    cp_save_path:str,
+    target_layer_type:list,
+    sample_num:int=200,
+    pooling_type:str='mean',
+    causal_type:str='chain'
+):
+    # This is the core function for CoCa framework
+
+    if not os.path.exists(cp_save_path):
+        os.makedirs(cp_save_path)
+
+    target_layer_names = []
+
+    for name, layer in explained_model.named_modules():
+        for layer_definition in target_layer_type:
+            if isinstance(layer, layer_definition) or issubclass(layer.__class__, layer_definition):
+                if name not in target_layer_names:
+                    target_layer_names.append(name)
+
+
+    concept_datasets = construct_causality_dataset(
+        pvr_training_dataloader, 
+        sample_num,
+        explained_model, 
+        target_layer_names,
+        pooling_type,
+        causal_type
+        )
+
+    pickle.dump(concept_datasets, open(os.path.join(cp_save_path, f"concept_causality_dataset.txt"), 'wb'))
+
+    best_cps_accuracy = {} 
+
+    for concept_name in concept_datasets.keys():
+        concept_label = concept_datasets[concept_name]["concept_label"]
+        concept_input_features = concept_datasets[concept_name]["concept_input_features"]
+        concept_list = concept_datasets[concept_name]["concept_list"]
+
+        cps_for_one_concept = []
+
+        for layer_name, concept_input_feature in concept_input_features.items():
+            cp = ConceptRepresentation(
+                concept_name, 
+                concept_list,
+                layer_name, 
+                {
+                    "model_type":'linear',
+                    "alpha":0.01
+                    }, 
+                save_path=os.path.join(cp_save_path, f"cp_for_{concept_name}_{layer_name}.txt")
+            )
+
+            cp.train(concept_input_feature,concept_label)
+
+            cps_for_one_concept.append((cp,cp.accuracies['overall']))
+
+        sorted_cps = sorted(cps_for_one_concept, key = lambda kv:kv[1], reverse=True)
+
+        best_cps_accuracy[concept_name] = (sorted_cps[0][0].accuracies['overall'], sorted_cps[0][0].bottleneck)
+
+        sorted_cps[0][0].save_path = os.path.join(cp_save_path, f"best_cp_for_{concept_name}.txt")
+
+        sorted_cps[0][0].save_cp()
+
+    print("Best CPs Accuracy: ", best_cps_accuracy)
+
+
 
 def train_cp_for_pvr_task(
     explained_model:torch.nn.Module, 
@@ -951,7 +1021,7 @@ def chi_square_for_conditional_independence(data, x, y, z:list):
 
 class CausalGraph:
     def __init__(self) -> None:
-        self.graph=Network()
+        self.graph=Network(directed=True)
 
     def add_node(self, node):
         self.graph.add_node(node, size=10)
@@ -1009,7 +1079,8 @@ def identify_global_concept_causality_graph(
     explained_model: torch.nn.Module,
     cp_save_path: str,
     num_samples: int=200,
-    independent_thresholds: float=0.00002
+    causal_type: str='chain',
+    independent_thresholds: float=0.002
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -1036,6 +1107,14 @@ def identify_global_concept_causality_graph(
         }
     '''
 
+    concept_dict = {
+        'chain':[],
+        'fork':[],
+        'collider':[]
+    }
+
+    # concept_datasets = pickle.load(open(os.path.join(cp_save_path, f"concept_causality_dataset.txt"), 'rb'))
+
     concept_datasets = pickle.load(open(os.path.join(cp_save_path, f"concept_position_dataset.txt"), 'rb'))
 
     for position_concept in concept_datasets.keys():
@@ -1049,11 +1128,13 @@ def identify_global_concept_causality_graph(
         num_samples,
         )
 
-    concept_list = []
+    concept_list = concept_dict[causal_type]
+
 
     for root, folder, files in os.walk(cp_save_path):
         for file in files:
-            if file.split("_")[0] == "best":
+            if file.split("_")[0] == "best" and len(file.split("_")[-1]) < 6:
+            # if file.split("_")[0] == "best":
                 cp = ConceptRepresentation()
                 cp.load_from_txt(os.path.join(root,file))
                 layer_name = cp.bottleneck
@@ -1072,7 +1153,9 @@ def identify_global_concept_causality_graph(
     for c in concept_list:
         init_graph.add_directional_edge("Model Input", c)
 
+    init_graph.add_node('model_output')
     concept_list.append('model_output')
+    print(concept_list)
 
     # Calculate independent value for adding skeletons
     for i, c in enumerate(concept_list):
@@ -1081,7 +1164,7 @@ def identify_global_concept_causality_graph(
             samples_for_causality['concept_prediction'][cc]
             table = pd.crosstab(samples_for_causality['concept_prediction'][c], samples_for_causality['concept_prediction'][cc])
             independent_results = chi2_contingency(table)
-            print(independent_results)
+            # print(independent_results)
 
             if independent_results.pvalue < independent_thresholds:
                 print(c,cc,'is correlation, p value: ', independent_results.pvalue)
@@ -1094,7 +1177,7 @@ def identify_global_concept_causality_graph(
             else:
                 print(c,cc,'is independent, p value: ', independent_results.pvalue)
 
-    # init_graph.show_graph()
+    init_graph.show_graph()
                 
     related_concept_list = init_graph.get_neighbors('model_output')
 
@@ -1280,67 +1363,93 @@ def calculate_global_tcav(
 
     return global_tcav_dict
 
-def identify_samples_based_on_cav(
+def identify_samples_based_on_cp(
     explained_model: torch.nn.Module,
     evaluate_dataset: Dataset,
-    cav_save_path: str,
+    cp_save_path: str,
     layer_name: str,
     num_samples: int,
+    concept_name: str,
+    concept_target_value: int,
+    pooling_type: str='mean'
     ):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     explained_model = explained_model.to(device)
 
-    cav_register_hook(explained_model, layer_name)
-
-    with tqdm(total=evaluate_dataset.__len__()) as tbar:
-        tbar.set_description_str("Calculating local local cav")
-        for i in range(evaluate_dataset.__len__()):
-            tbar.update(1)
-
-            explained_sample, classification, record = evaluate_dataset.__getitem__(i)
-            model_input = explained_sample.unsqueeze(0).to(device)
-            explained_model = explained_model.to(device)
-            output = explained_model(model_input)
-
-
-    features = features_out
-
     similar_sample_dict={}
 
-    for root, folder, files in os.walk(cav_save_path):
+    for root, folder, files in os.walk(cp_save_path):
         for file in files:
-            if file.split("_")[0] == "cav":
-                cav = CAV()
-                cav.load_from_txt(os.path.join(root,file))
+            if "best_cp" in file:
+                cp = ConceptRepresentation()
+                cp.load_from_txt(os.path.join(root,file))
 
-                if layer_name != cav.bottleneck:
-                    raise Exception(f"You input a different layer name {layer_name} for target cav layer name {cav.bottleneck}")
+                if cp.concept_name != concept_name:
+                    continue
+                
+                target_cp = cp
+
+                layer_name = cp.bottleneck
+                
+                forward_hook = cp_register_hook(explained_model, [layer_name], pooling_type)
+
+                if len(features_out) == 0:
+
+                    with tqdm(total=evaluate_dataset.__len__()) as tbar:
+                        tbar.set_description_str("Calculating local cp")
+                        for i in range(evaluate_dataset.__len__()):
+                            tbar.update(1)
+
+                            explained_sample, classification, record = evaluate_dataset.__getitem__(i)
+                            model_input = explained_sample.unsqueeze(0).to(device)
+                            explained_model = explained_model.to(device)
+                            output = explained_model(model_input)
+
+
+                features = features_out
 
                 cosine_similarity_list = []
 
                 for feature in features:
-                    cosine_similarity = - np.dot(feature.squeeze(), cav.get_direction()) / (np.linalg.norm(feature.squeeze())*np.linalg.norm(cav.get_direction()))
+                    # pred = int(cp.predict(feature)[0])
+                    cosine_similarity = np.dot(feature.squeeze(), cp.get_direction(cp.concept_list[concept_target_value])) / (np.linalg.norm(feature.squeeze())*np.linalg.norm(cp.get_direction(cp.concept_list[concept_target_value])))
                     cosine_similarity_list.append(cosine_similarity)
 
                 cosine_similarity_list = np.array(cosine_similarity_list)
                 top_index = cosine_similarity_list.argsort()[::-1]
 
-                similar_sample_dict[cav.concept_name] = top_index
+                similar_sample_dict[cp.concept_name] = top_index
 
-                for i in range(num_samples):
-                    plt.subplot(1, num_samples, i+1)
-                    show_sample,_,_ = evaluate_dataset.__getitem__(top_index[i])
-                    show_sample = show_sample.numpy().transpose(1,2,0)
-                    plt.imshow(show_sample)
-                    plt.title(f"Sim:{round(cosine_similarity_list[top_index[i]],3)}")
+                [h.remove() for h in forward_hook]
+                # features_out.clear()
 
-                    print(cav.accuracies)
+    for i in range(num_samples):
+        plt.subplot(1, num_samples*2, i+1)
+        show_sample,_,_ = evaluate_dataset.__getitem__(top_index[i])
+        show_sample = show_sample.numpy().transpose(1,2,0)
+        plt.imshow(show_sample)
+        plt.axis('off')
+        # plt.title(f"Sim:{round(cosine_similarity_list[top_index[i]],3)}")
 
-                plt.suptitle(f"{cav.concept_name}\nAcc:{cav.accuracies['overall']}")
+    for i in range(num_samples):
+        plt.subplot(1, num_samples*2, i+1+num_samples)
+        show_sample,_,_ = evaluate_dataset.__getitem__(top_index[-i-1])
+        show_sample = show_sample.numpy().transpose(1,2,0)
+        plt.imshow(show_sample)
+        plt.axis('off')
+        # plt.title(f"Sim:{round(cosine_similarity_list[top_index[i]],3)}")
+    
+    
+    plt.suptitle(f"CR: {target_cp.concept_name} {concept_target_value}\nAcc:{target_cp.accuracies['overall']}")
 
-                plt.show()
+    plt.show()
+
+
+    
+
+    
 
 
 def concept_maps(

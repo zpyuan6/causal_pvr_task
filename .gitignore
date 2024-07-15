@@ -2,7 +2,7 @@ wandb/*
 .vscode/*
 FeatureVisualization/*
 *.html
-
+*.xlsx
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
